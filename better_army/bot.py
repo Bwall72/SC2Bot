@@ -23,11 +23,10 @@ class bot(sc2.BotAI):
     
     def __init__(self):
         self.pool_first = random.choice(['True', 'False'])
+        self.scouts = []
         
     async def on_step(self, iteration):
         # set parameters
-        if iteration == 0:
-            self.scouts = [self.units(OVERLORD).first]
         self.bases = self.get_bases()
         await self.distribute_workers()
         # build structures
@@ -313,6 +312,24 @@ class bot(sc2.BotAI):
 
     # send overlord to scout enemy
     async def scout(self):
+        overlords = [ov.tag for ov in self.units(OVERLORD)]
+        # getting scouting overlords
+        if self.scouts == []:
+            self.scouts.append(overlords[0])
+        nonscouts = np.setdiff1d(overlords, self.scouts).tolist()
+        while len(overlords) > 3 and len(nonscouts) > 0 and len(self.scouts) < 3:
+            self.scouts.append(nonscouts[0])
+            nonscouts.remove(nonscouts[0])
+
+        for ov in self.units(OVERLORD):
+            if ov.tag in self.scouts:
+                scout_location = self.scout_location()
+                await self.do(ov.move(scout_location))
+
+        for s in self.scouts:
+            if s not in overlords:
+                self.scouts.remove(s)
+        
                 
     def scout_location(self):
         enemy_start_location = self.enemy_start_locations[0]
