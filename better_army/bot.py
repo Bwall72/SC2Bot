@@ -1,11 +1,15 @@
 import os
 import random
-import sc2
 import time
-from sc2 import run_game, maps, Race, Difficulty
-from sc2.player import Bot, Computer, Player
+
+import numpy as np
+import sc2
+from sc2.ids.ability_id import *
+from sc2.ids.unit_typeid import UnitTypeId
+from sc2 import Difficulty, Race, maps, position, run_game
 from sc2.constants import *
 from sc2.data import race_townhalls
+from sc2.player import Bot, Computer, Player
 
 has_ling_speed = False
 max_extractors = 6
@@ -22,6 +26,8 @@ class bot(sc2.BotAI):
         
     async def on_step(self, iteration):
         # set parameters
+        if iteration == 0:
+            self.scouts = [self.units(OVERLORD).first]
         self.bases = self.get_bases()
         await self.distribute_workers()
         # build structures
@@ -39,10 +45,14 @@ class bot(sc2.BotAI):
             await self.build_queen()
             await self.build_safety_lings()
             await self.build_roaches()
+            await self.build_hydralisks()
         # skills and upgrades
         await self.queen_inject()
         await self.ling_speed()
-        #attack
+        await self.hydraden_upgrades()
+        # actions
+        if iteration % 10 == 0:
+            await self.scout()
         await self.attack()
         
 
@@ -77,8 +87,11 @@ class bot(sc2.BotAI):
         extractors = len(self.units(EXTRACTOR))
         food_used  = len(self.units)
         drone      = None
-        geyser     = None
+        geysers    = self.state.vespene_geyser.closer_than(15.0, self.townhalls.random)
         global max_extractors
+
+        if geysers is None or geysers == []:
+            return
 
         if not self.can_afford(EXTRACTOR) or self.already_pending(EXTRACTOR):
             return
@@ -97,38 +110,22 @@ class bot(sc2.BotAI):
             return
 
         if extractors == 0:
-            '''
-            drone = self.workers.random
-            geysers = self.state.vespene_geyser
-            geyser = None
-            while True:
-                try:
-                    geyser = geysers.closest_to(drone.position)
-                    await self.do(drone.build(EXTRACTOR, geyser))
-                    break
-                except Exception as e:
-                    geysers.remove(geyser)
-            '''
-            drone = self.workers.random
-            target = self.state.vespene_geyser.closest_to(drone.position)
-            err = await self.do(drone.build(EXTRACTOR, target))
+            geyser = geysers[0]
+            drone  = self.select_build_worker(geyser.position)
+            if not self.units(EXTRACTOR).closer_than(1.0, geyser).exists:
+                await self.do(drone.build(EXTRACTOR, geyser))
+            #await self.do(drone.build(EXTRACTOR, target))
         elif extractors < max_extractors and extractors < food_used/30:
-            '''
-            drone = self.workers.random
-            geysers = self.state.vespene_geyser
-            geyser = None
-            while True:
-                try:
-                    geyser = geysers.closest_to(drone.position)
-                    await self.do(drone.build(EXTRACTOR, geyser))
-                    break
-                except Exception as e:
-                    geysers.remove(geyser)
-            '''
+            """"
             drone = self.workers.random
             target = self.state.vespene_geyser.closest_to(drone.position)
-            err = await self.do(drone.build(EXTRACTOR, target))
-
+            await self.do(drone.build(EXTRACTOR, target))
+            """
+            geyser = geysers[0]
+            drone  = self.select_build_worker(geyser.position)
+            if not self.units(EXTRACTOR).closer_than(1.0, geyser).exists:
+                await self.do(drone.build(EXTRACTOR, geyser))
+                
     async def build_lair(self):
         if self.units(LAIR).exists or self.already_pending(LAIR):
             return
@@ -164,7 +161,6 @@ class bot(sc2.BotAI):
         food_left      = self.supply_left
         larva_avail    = self.units(LARVA).ready.exists
         can_afford     = self.minerals > 50
-        larvae         = self.units(LARVA)
 
         if not (larva_avail and can_afford and workers < max_drones):
             return
@@ -190,11 +186,13 @@ class bot(sc2.BotAI):
         # less than 50 supply, build ol one at a time
         if food_used < 30 and food_left < 2 and \
            not self.already_pending(OVERLORD):
-            await self.do(larvae.random.train(OVERLORD))
+            larva = larvae.random
+            await self.do(larva.train(OVERLORD))
             return
         
         if food_used >= 30 and (food_left < food_used/10):
-            await self.do(larvae.random.train(OVERLORD))
+            larva = larvae.random
+            await self.do(larva.train(OVERLORD))
             return
 
     async def attack(self):
@@ -248,7 +246,7 @@ class bot(sc2.BotAI):
         if not self.units(SPAWNINGPOOL).ready.exists or num_lings > 4:
             return
 
-        for i in range(0,2):
+        for _ in range(0,2):
             if self.minerals >= 50 and len(larvae) > 0 and self.supply_left > 0:
                 await self.do(larvae.random.train(ZERGLING))
 
@@ -271,7 +269,22 @@ class bot(sc2.BotAI):
         else:
             await self.do(larvae.random.train(ROACH))
                 
-        
+    async def build_hydralisks(self):
+        larvae = self.units(LARVA)
+        num_hydras = len(self.units(HYDRALISK))
+
+        if not self.units(HYDRALISKDEN).ready.exists:
+            return
+        if not self.can_afford(HYDRALISK) or len(larvae) == 0 or self.supply_left < 2:
+            return
+
+        if self.time < 420 and num_hydras < 7:
+            await self.do(larvae.random.train(HYDRALISK))
+        elif self.bases[0] < 4 and num_hydras < 12:
+            await self.do(larvae.random.train(HYDRALISK))
+        else:
+            await self.do(larvae.random.train(HYDRALISK))
+            
     async def queen_inject(self):
         for q in self.units(QUEEN).ready.idle:
             abilities = await self.get_available_abilities(q)
@@ -294,6 +307,33 @@ class bot(sc2.BotAI):
             await self.do(pool.first(RESEARCH_ZERGLINGMETABOLICBOOST))
             has_ling_speed = True
 
+    async def hydraden_upgrades(self):
+        return
+        #hydraden = self.units(HYDRALISKDEN)
+
+    # send overlord to scout enemy
+    async def scout(self):
+                
+    def scout_location(self):
+        enemy_start_location = self.enemy_start_locations[0]
+        x = enemy_start_location[0]
+        y = enemy_start_location[1]
+
+        x += ((random.randrange(-20, 20)) / 100) * x
+        y += ((random.randrange(-20, 20)) / 100) * y
+
+        if x < 0:
+            x = 0
+        elif x > self.game_info.map_size[0]:
+            x = self.game_info.map_size[0]
+    
+        if y < 0:
+            y = 0
+        elif y > self.game_info.map_size[1]:
+            y = self.game_info.map_size[1]
+
+        return position.Point2(position.Pointlike((x,y)))
+        
     def get_bases(self):
         hatches = len(self.units(HATCHERY).ready)
         lairs   = len(self.units(LAIR))
