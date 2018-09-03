@@ -24,6 +24,10 @@ class bot(sc2.BotAI):
     def __init__(self):
         self.pool_first = random.choice(['True', 'False'])
         self.scouts = []
+        self.enemy_bases = []
+        self.scouted_locations = {}
+
+
         
     async def on_step(self, iteration):
         # set parameters
@@ -311,30 +315,56 @@ class bot(sc2.BotAI):
         #hydraden = self.units(HYDRALISKDEN)
 
     # send overlord to scout enemy
-    async def scout(self):
-        overlords = [ov.tag for ov in self.units(OVERLORD)]
-        # getting scouting overlords
+    async def scout(self, expansion_dict={}):
+        overlords = [ov.tag for ov in self.units(OVERLORD).ready]
+        
+        if len(expansion_dict.items()) == 0:
+            enemy_start_location = self.enemy_start_locations[0]
+            for el in self.expansion_locations:
+                dist = el.distance_to(enemy_start_location)
+                expansion_dict[dist] = el
+                
+        scouting_locations = expansion_dict.items()
+        scouting_locations = sorted(scouting_locations, key=lambda x:x[0])
+        
+        
         if self.scouts == []:
             self.scouts.append(overlords[0])
+            for dist, loc in scouting_locations:
+                if not (loc in self.scouted_locations.values()):
+                    self.scouted_locations[overlords[0]] = loc
+                    break
+                
         nonscouts = np.setdiff1d(overlords, self.scouts).tolist()
         while len(overlords) > 3 and len(nonscouts) > 0 and len(self.scouts) < 3:
             self.scouts.append(nonscouts[0])
             nonscouts.remove(nonscouts[0])
+            for dist, loc in scouting_locations:
+                if not (loc in self.scouted_locations.values()):
+                    self.scouted_locations[self.scouts[-1]] = loc
+                    break 
 
-        for ov in self.units(OVERLORD):
+        for ov in self.units(OVERLORD).ready:
             if ov.tag in self.scouts:
-                scout_location = self.scout_location()
+                base_scouting_location = self.scouted_locations[ov.tag]
+                scout_location = self.get_scout_location(base_scouting_location)
                 await self.do(ov.move(scout_location))
-
+        
+            
+        keys_to_delete = []
         for s in self.scouts:
             if s not in overlords:
                 self.scouts.remove(s)
-        
-                
-    def scout_location(self):
-        enemy_start_location = self.enemy_start_locations[0]
-        x = enemy_start_location[0]
-        y = enemy_start_location[1]
+                for k in self.scouted_locations.keys():
+                    if k == s:
+                        keys_to_delete.append(k)
+
+        for k in keys_to_delete:
+            del self.scouted_locations[k]
+
+    def get_scout_location(self, base_loc):
+        x = base_loc[0]
+        y = base_loc[1]               
 
         x += ((random.randrange(-20, 20)) / 100) * x
         y += ((random.randrange(-20, 20)) / 100) * y
